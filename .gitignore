@@ -1,0 +1,4 @@
+# Ignora arquivos gerados pelo sistema
+*.jou
+*.log
+build/
