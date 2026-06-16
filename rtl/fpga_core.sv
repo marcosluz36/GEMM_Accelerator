@@ -28,19 +28,30 @@
 //////////////////////////////////////////////////////////////////////////////////
 
 
-module fpga_core #(
+  module fpga_core #(
   localparam DDR3_DATA_WIDTH = 128,
   localparam DDR3_ADDR_WIDTH = 28,
   localparam DDR3_REQ_LEN = 16,
-  localparam NUM_WORDS = 8,
+  localparam NUM_WORDS = 128,
   localparam NUM_ELEMENTS = DDR3_DATA_WIDTH / 8
 )(
   input  wire        clk,
   input  wire        rst_n,
-
-  input  wire        btn0,
-  output wire        led0,
   
+  // Ethernet PHY interface
+  output wire        phy_ref_clk,
+  input  wire        phy_rx_clk,
+  input  wire [3:0]  phy_rxd,
+  input  wire        phy_rx_dv,
+  input  wire        phy_rx_er,
+  input  wire        phy_tx_clk,
+  output wire [3:0]  phy_txd,
+  output wire        phy_tx_en,
+  input  wire        phy_col,
+  input  wire        phy_crs,
+  output wire        phy_reset_n,
+  
+  // DDR3 PHY interface
   inout  wire [15:0] ddr3_dq,
   inout  wire [1:0]  ddr3_dqs_n,
   inout  wire [1:0]  ddr3_dqs_p,
@@ -63,22 +74,8 @@ module fpga_core #(
   
   wire         deserialize_en;
   wire         serialize_en;
-  
-  wire         s_serialize_tready_in;
-  wire         s_serialize_tvalid_in;
-  wire [127:0] s_serialize_tdata_in;
-  wire         s_serialize_tlast_in;
-  
-  wire         m_serialize_tready_in;
-  wire         m_serialize_tvalid_in;
-  wire [7:0]   m_serialize_tdata_in;
-  wire         m_serialize_tlast_in;
-
-  wire         m_serialize_tready_out;
-  wire         m_serialize_tvalid_out;
-  wire [7:0]   m_serialize_tdata_out;
-  wire         m_serialize_tlast_out;
-  
+  wire         tx_done;
+   
   wire         ddr3_req_tready;
   wire         ddr3_req_tvalid;
   wire         ddr3_req_cmd;
@@ -99,64 +96,103 @@ module fpga_core #(
   wire         ddr3_done;
   wire         ddr3_error;
   
-  logic [2:0] dbg_state;
-  logic [3:0] dbg_ctrl;
-    
-  logic       sys_clk;
-  logic       clk_ref;
-  logic       clk_locked;
-  
-  logic       mig_clk;
-  logic       mig_rst;
+  wire [7:0]   rx_payload_tdata;
+  wire         rx_payload_tvalid;
+  wire         rx_payload_tready;
+  wire         rx_payload_tlast;
+  wire [15:0]  rx_payload_length;
+  wire         rx_payload_length_valid;
 
-  logic [7:0] rst_cnt;
-  logic       sys_rst;
+  wire [7:0]   tx_payload_tdata;
+  wire         tx_payload_tvalid;
+  wire         tx_payload_tready;
+  wire         tx_payload_tlast;
+  wire [15:0]  tx_payload_length;
+  
+  logic [2:0]  dbg_state;
+   
+  logic        sys_clk;
+  logic        clk_ref;
+  logic        clk_locked;
+
+  logic [7:0]  rst_cnt;
+  logic        sys_rst;
 
   assign rst = ~rst_n;
-  assign m_serialize_tready_out = 1'b1;
+  assign phy_reset_n = clk_locked && !sys_rst;
+  assign tx_done = tx_payload_tvalid && tx_payload_tready && tx_payload_tlast;
   
-  assign led0 = btn0;
-  assign start = btn0;
+  assign tx_payload_length = rx_payload_length;
 
-  always_ff @(posedge clk or posedge rst) begin
+  always_ff @(posedge sys_clk or posedge rst) begin
     if (rst) begin
       rst_cnt <= 8'd0;
-      sys_rst <= 1'b0;
+      sys_rst <= 1'b1;
     end 
-    
     else if (!clk_locked) begin
       rst_cnt <= 8'd0;
-      sys_rst <= 1'b0;
+      sys_rst <= 1'b1;
     end 
-    
     else if (rst_cnt != 8'hFF) begin
       rst_cnt <= rst_cnt + 8'd1;
-      sys_rst <= 1'b0;
-    end 
-    
-    else begin
       sys_rst <= 1'b1;
+    end 
+    else begin
+      sys_rst <= 1'b0;
     end
   end
-  
+    
   clk_wiz_0 clk_wiz_inst (
     .clk_in1(clk),
     .reset(rst),
     .clk_out1(sys_clk),
     .clk_out2(clk_ref),
+    .clk_out3(phy_ref_clk),
     .locked(clk_locked)
   );
+  
+  ethernet_core eth_core_inst (
+    .clk(sys_clk),
+    .rst(sys_rst),
 
-  main_orchestrator 
-  main_orchestrator_inst (
-    .clk(mig_clk),
-    .rst(mig_rst),
+    // PHY-side clocks/signals
+    .phy_rx_clk(phy_rx_clk), 
+    .phy_rxd(phy_rxd), 
+    .phy_rx_dv(phy_rx_dv), 
+    .phy_tx_clk(phy_tx_clk), 
+    .phy_txd(phy_txd), 
+    .phy_tx_en(phy_tx_en), 
+    .phy_rx_er(phy_rx_er),   
+    .phy_col(phy_col), 
+    .phy_crs(phy_crs), 
+
+    // RX payload output - sys_clk domain
+    .m_axis_rx_tdata  (rx_payload_tdata),
+    .m_axis_rx_tvalid (rx_payload_tvalid),
+    .m_axis_rx_tready (rx_payload_tready),
+    .m_axis_rx_tlast  (rx_payload_tlast),
+    .m_axis_rx_payload_length(rx_payload_length),
+    .m_axis_rx_payload_length_valid(rx_payload_length_valid),
+
+    // TX payload input - sys_clk domain
+    .s_axis_tx_tdata  (tx_payload_tdata),
+    .s_axis_tx_tvalid (tx_payload_tvalid),
+    .s_axis_tx_tready (tx_payload_tready),
+    .s_axis_tx_tlast  (tx_payload_tlast),
+    .s_axis_tx_payload_length (tx_payload_length)
+  );
+
+  main_orchestrator # (
+    .NUM_WORDS(NUM_WORDS)
+  ) main_orchestrator_inst (
+    .clk(sys_clk),
+    .rst(sys_rst),
     
-    .rx_tvalid(start),
+    .rx_tvalid(rx_payload_tvalid),
     
     .deserialize_en(deserialize_en),
     .serialize_en(serialize_en),
-    .serialize_done(m_serialize_tlast_out),
+    .serialize_done(tx_done),
     
     .ddr3_error(ddr3_error),
     .ddr3_done(ddr3_done),
@@ -173,51 +209,18 @@ module fpga_core #(
     .dbg_state(dbg_state)
   );
   
-  dummy_data #(
-    .NUM_WORDS(NUM_WORDS),
-    .WORD_WIDTH(DDR3_DATA_WIDTH)
-  ) test_data_inst (
-    .clk(mig_clk),
-    .rst(mig_rst),
-    .en(deserialize_en),
-    
-    .m_tready(s_serialize_tready_in),
-    .m_tvalid(s_serialize_tvalid_in),
-    .m_tdata(s_serialize_tdata_in),
-    .m_tlast(s_serialize_tlast_in)
-  );
-  
-  serializer #(
-    .OUTPUT_WIDTH(8),
-    .NUM_ELEMENTS(NUM_ELEMENTS)
-  ) serialize_in_inst (
-    .clk(mig_clk),
-    .rst(mig_rst),
-    .en(deserialize_en),
-    
-    .s_tready(s_serialize_tready_in),
-    .s_tvalid(s_serialize_tvalid_in),
-    .s_tdata(s_serialize_tdata_in),
-    .s_tlast(s_serialize_tlast_in),
-
-    .m_tready(m_serialize_tready_in),
-    .m_tvalid(m_serialize_tvalid_in),
-    .m_tdata(m_serialize_tdata_in),
-    .m_tlast(m_serialize_tlast_in)
-  );
-  
   deserializer #(
     .INPUT_WIDTH(8),
     .NUM_ELEMENTS(NUM_ELEMENTS)
   ) deserialize_in_inst (
-    .clk(mig_clk),
-    .rst(mig_rst),
+    .clk(sys_clk),
+    .rst(sys_rst),
     .en(deserialize_en),
     
-    .s_tready(m_serialize_tready_in),
-    .s_tvalid(m_serialize_tvalid_in),
-    .s_tdata(m_serialize_tdata_in),
-    .s_tlast(m_serialize_tlast_in),
+    .s_tready(rx_payload_tready),
+    .s_tvalid(rx_payload_tvalid),
+    .s_tdata(rx_payload_tdata),
+    .s_tlast(rx_payload_tlast),
 
     .m_tready(ddr3_wr_tready),
     .m_tvalid(ddr3_wr_tvalid),
@@ -234,29 +237,31 @@ module fpga_core #(
     .clk_ref(clk_ref),
     .rst(sys_rst),
   
-    .mig_clk(mig_clk),
-    .mig_rst(mig_rst),
-  
+    // DDR3 request interface
     .ddr3_req_tvalid(ddr3_req_tvalid),
     .ddr3_req_tready(ddr3_req_tready),
     .ddr3_req_cmd(ddr3_req_cmd),
     .ddr3_req_addr(ddr3_req_addr),
     .ddr3_req_len(ddr3_req_len),
-  
+    
+    // DDR3 write data interface
     .ddr3_wr_tdata(ddr3_wr_tdata),
     .ddr3_wr_tvalid(ddr3_wr_tvalid),
     .ddr3_wr_tready(ddr3_wr_tready),
     .ddr3_wr_tlast(ddr3_wr_tlast),
   
+    // DDR3 read data interface
     .ddr3_rd_tready(ddr3_rd_tready),
     .ddr3_rd_tdata(ddr3_rd_tdata),
     .ddr3_rd_tvalid(ddr3_rd_tvalid),
     .ddr3_rd_tlast(ddr3_rd_tlast),
   
+    // DDR3 status interface
     .ddr3_busy(ddr3_busy),
     .ddr3_done(ddr3_done),
     .ddr3_error(ddr3_error),
   
+    // DDR3 PHY interface
     .ddr3_addr(ddr3_addr),
     .ddr3_ba(ddr3_ba),
     .ddr3_cas_n(ddr3_cas_n),
@@ -271,17 +276,15 @@ module fpga_core #(
     .ddr3_dqs_p(ddr3_dqs_p),
     .ddr3_cs_n(ddr3_cs_n),
     .ddr3_dm(ddr3_dm),
-    .ddr3_odt(ddr3_odt),
-    
-    .dbg_ctrl(dbg_ctrl)
+    .ddr3_odt(ddr3_odt)
   );
   
   serializer #(
     .OUTPUT_WIDTH(8),
     .NUM_ELEMENTS(NUM_ELEMENTS)
   ) serializer_out (
-    .clk(mig_clk),
-    .rst(mig_rst),
+    .clk(sys_clk),
+    .rst(sys_rst),
     .en(serialize_en),
     
     .s_tready(ddr3_rd_tready),
@@ -289,38 +292,42 @@ module fpga_core #(
     .s_tdata(ddr3_rd_tdata),
     .s_tlast(ddr3_rd_tlast),
 
-    .m_tready(m_serialize_tready_out),
-    .m_tvalid(m_serialize_tvalid_out),
-    .m_tdata(m_serialize_tdata_out),
-    .m_tlast(m_serialize_tlast_out)
-  );
-  
-  ila_0 debug_output(
-    .clk(mig_clk),                    // input wire clk
-  
-    .probe0(start),                   // input wire [0:0]   probe0  
-    .probe1(deserialize_en),          // input wire [0:0]   probe1 
-    .probe2(serialize_en),            // input wire [0:0]   probe2 
-    .probe3(ddr3_req_tready),         // input wire [0:0]   probe3 
-    .probe4(ddr3_req_tvalid),         // input wire [0:0]   probe4
-    .probe5(ddr3_req_cmd),            // input wire [0:0]   probe5
-    .probe6(ddr3_req_addr),           // input wire [27:0]  probe6 
-    .probe7(ddr3_req_len),            // input wire [15:0]  probe7 
-    .probe8(ddr3_wr_tready),          // input wire [0:0]   probe8 
-    .probe9(ddr3_wr_tvalid),          // input wire [0:0]   probe9
-    .probe10(ddr3_wr_tdata),          // input wire [127:0] probe10
-    .probe11(ddr3_rd_tvalid),         // input wire [0:0]   probe11
-    .probe12(ddr3_rd_tdata),          // input wire [127:0] probe12
-    .probe13(m_serialize_tready_out), // input wire [0:0]   probe13
-    .probe14(m_serialize_tvalid_out), // input wire [0:0]   probe14
-    .probe15(m_serialize_tdata_out),  // input wire [7:0] probe15
-    .probe16(m_serialize_tlast_out),  // input wire [0:0]   probe16
-    .probe17(ddr3_done),              // input wire [0:0]   probe17
-    .probe18(ddr3_error),             // input wire [0:0]   probe18
-    .probe19(dbg_state),              // input wire [2:0]   probe19
-    .probe20(ddr3_rd_tready),         // input wire [0:0]   probe20
-    .probe21(dbg_ctrl)                // input wire [3:0]   probe21
+    .m_tready(tx_payload_tready),
+    .m_tvalid(tx_payload_tvalid),
+    .m_tdata(tx_payload_tdata),
+    .m_tlast(tx_payload_tlast)
   );
 
+//  ila_0 debug_output(
+//    .clk(sys_clk),            
+  
+//    .probe0(rx_payload_tready),      
+//    .probe1(rx_payload_tvalid),      
+//    .probe2(rx_payload_tdata),       
+//    .probe3(rx_payload_tlast),        
+//    .probe4(rx_payload_length),       
+//    .probe5(rx_payload_length_valid),
+//    .probe6(tx_payload_tready),      
+//    .probe7(tx_payload_tvalid),      
+//    .probe8(tx_payload_tdata),       
+//    .probe9(tx_payload_tlast),       
+//    .probe10(ddr3_wr_tready),        
+//    .probe11(ddr3_wr_tvalid),        
+//    .probe12(ddr3_wr_tdata),         
+//    .probe13(ddr3_wr_tlast),         
+//    .probe14(ddr3_rd_tready),        
+//    .probe15(ddr3_rd_tvalid),        
+//    .probe16(ddr3_rd_tdata),       
+//    .probe17(ddr3_rd_tlast),
+//    .probe18(ddr3_req_tready),
+//    .probe19(ddr3_req_tvalid),
+//    .probe20(deserialize_en),        
+//    .probe21(serialize_en),
+//    .probe22(tx_done),  
+//    .probe23(ddr3_done),
+//    .probe24(ddr3_busy),
+//    .probe25(ddr3_error),
+//    .probe26(dbg_state)
+//  );
 
 endmodule

@@ -30,9 +30,6 @@ module ddr3_core #(
   input  wire                        clk_ref,
   input  wire                        rst,
   
-  output wire                        mig_clk,
-  output wire                        mig_rst,
-  
   output logic                       ddr3_req_tready,
   input  wire                        ddr3_req_tvalid,
   input  wire                        ddr3_req_cmd,
@@ -52,7 +49,6 @@ module ddr3_core #(
   output logic                       ddr3_busy,
   output logic                       ddr3_done,
   output logic                       ddr3_error,
-  output logic [3:0]                 dbg_ctrl,
  
   inout  wire  [15:0]                ddr3_dq,
   inout  wire  [1:0]                 ddr3_dqs_n,
@@ -71,39 +67,152 @@ module ddr3_core #(
   output logic [0:0]                 ddr3_odt
 );
 
-  logic         init_calib_complete;
+  logic                       init_calib_complete;
 
-  logic         app_en;
-  logic         app_rdy;
-  logic [27:0]  app_addr;
-  logic [2:0]   app_cmd;
+  logic                       app_en;
+  logic                       app_rdy;
+  logic [27:0]                app_addr;
+  logic [2:0]                 app_cmd;
 
-  logic [127:0] app_wdf_data;
-  logic         app_wdf_end;
-  logic         app_wdf_wren;
-  logic         app_wdf_rdy;
-  logic [15:0]  app_wdf_mask;
+  logic [127:0]               app_wdf_data;
+  logic                       app_wdf_end;
+  logic                       app_wdf_wren;
+  logic                       app_wdf_rdy;
+  logic [15:0]                app_wdf_mask;
 
-  logic [127:0] app_rd_data;
-  logic         app_rd_data_end;
-  logic         app_rd_data_valid;
+  logic [127:0]               app_rd_data;
+  logic                       app_rd_data_end;
+  logic                       app_rd_data_valid;
 
-  logic         app_sr_req;
-  logic         app_ref_req;
-  logic         app_zq_req;
-  logic         app_sr_active;
-  logic         app_ref_ack;
-  logic         app_zq_ack;
+  logic                       app_sr_req;
+  logic                       app_ref_req;
+  logic                       app_zq_req;
+  logic                       app_sr_active;
+  logic                       app_ref_ack;
+  logic                       app_zq_ack;
 
-  logic         ui_clk;
-  logic         ui_clk_sync_rst;
-
-  assign mig_clk = ui_clk;
-  assign mig_rst = ui_clk_sync_rst;
+  logic                       ui_clk;
+  logic                       ui_clk_sync_rst;
+  
+  logic [47:0]                ddr3_req_tdata;
+  
+  logic                       fifo_req_tready;
+  logic                       fifo_req_tvalid;
+  logic [47:0]                fifo_req_tdata;
+  logic [27:0]                fifo_req_addr;
+  logic [15:0]                fifo_req_len;
+  logic                       fifo_req_cmd;
+  logic [2:0]                 fifo_req_pad;
+  
+  logic                       fifo_wr_tready;
+  logic                       fifo_wr_tvalid;
+  logic [DDR3_DATA_WIDTH-1:0] fifo_wr_tdata;
+  logic                       fifo_wr_tlast;
+  
+  logic                       fifo_rd_tready;
+  logic                       fifo_rd_tvalid;
+  logic [DDR3_DATA_WIDTH-1:0] fifo_rd_tdata;
+  logic                       fifo_rd_tlast;
+  
+  logic                       ddr3_raw_busy;
+  logic                       ddr3_raw_done;
+  logic                       ddr3_raw_error;
+  
+  logic [3:0]                dbg_ctrl;
+  
+  assign ddr3_req_tdata = {3'd0, ddr3_req_addr, ddr3_req_len, ddr3_req_cmd};
+  assign {fifo_req_pad,fifo_req_addr, fifo_req_len, fifo_req_cmd} = fifo_req_tdata;
 
   assign app_sr_req  = 0;
   assign app_ref_req = 0;
   assign app_zq_req  = 0;
+
+  axis_data_fifo_1 ddr3_req_fifo (
+    .s_axis_aresetn(~rst),
+    .s_axis_aclk(clk),      
+    .s_axis_tvalid(ddr3_req_tvalid),  
+    .s_axis_tready(ddr3_req_tready),  
+    .s_axis_tdata(ddr3_req_tdata),     
+       
+    .m_axis_aclk(ui_clk),      
+    .m_axis_tvalid(fifo_req_tvalid),  
+    .m_axis_tready(fifo_req_tready),  
+    .m_axis_tdata(fifo_req_tdata)     
+  );
+
+  axis_data_fifo_0 ddr3_wr_fifo (
+    .s_axis_aresetn(~rst),
+    .s_axis_aclk(clk),      
+    .s_axis_tvalid(ddr3_wr_tvalid),  
+    .s_axis_tready(ddr3_wr_tready),  
+    .s_axis_tdata(ddr3_wr_tdata),    
+    .s_axis_tlast(ddr3_wr_tlast), 
+       
+    .m_axis_aclk(ui_clk),      
+    .m_axis_tvalid(fifo_wr_tvalid),  
+    .m_axis_tready(fifo_wr_tready),  
+    .m_axis_tdata(fifo_wr_tdata),    
+    .m_axis_tlast(fifo_wr_tlast)     
+  );
+  
+  axis_data_fifo_0 ddr3_rd_fifo (
+    .s_axis_aresetn(~ui_clk_sync_rst),
+    .s_axis_aclk(ui_clk),      
+    .s_axis_tvalid(fifo_rd_tvalid),  
+    .s_axis_tready(fifo_rd_tready),
+    .s_axis_tdata(fifo_rd_tdata),    
+    .s_axis_tlast(fifo_rd_tlast), 
+       
+    .m_axis_aclk(clk),      
+    .m_axis_tvalid(ddr3_rd_tvalid),  
+    .m_axis_tready(ddr3_rd_tready),  
+    .m_axis_tdata(ddr3_rd_tdata),    
+    .m_axis_tlast(ddr3_rd_tlast)     
+  );
+  
+  xpm_cdc_single #(
+    .DEST_SYNC_FF   (2),
+    .INIT_SYNC_FF   (0),
+    .SIM_ASSERT_CHK (0),
+    .SRC_INPUT_REG  (0)
+  ) uddr3_busy_cdc (
+    .src_clk  (ui_clk),
+    .src_in   (ddr3_raw_busy),
+    .dest_clk (clk),
+    .dest_out (ddr3_busy)
+  );
+  
+  xpm_cdc_pulse #(
+    .DEST_SYNC_FF   (2),
+    .INIT_SYNC_FF   (0),
+    .REG_OUTPUT     (1),
+    .RST_USED       (1),
+    .SIM_ASSERT_CHK (0)
+  ) ddr3_done_cdc (
+    .src_clk    (ui_clk),
+    .src_rst    (ui_clk_sync_rst),
+    .src_pulse  (ddr3_raw_done),
+  
+    .dest_clk   (clk),
+    .dest_rst   (rst),
+    .dest_pulse (ddr3_done)
+  );
+  
+  xpm_cdc_pulse #(
+    .DEST_SYNC_FF   (2),
+    .INIT_SYNC_FF   (0),
+    .REG_OUTPUT     (1),
+    .RST_USED       (1),
+    .SIM_ASSERT_CHK (0)
+  ) ddr3_error_cdc (
+    .src_clk    (ui_clk),
+    .src_rst    (ui_clk_sync_rst),
+    .src_pulse  (ddr3_raw_error),
+  
+    .dest_clk   (clk),
+    .dest_rst   (rst),
+    .dest_pulse (ddr3_error)
+  );
 
   ddr3_controller #(
     .DDR3_DATA_WIDTH(DDR3_DATA_WIDTH),
@@ -115,29 +224,29 @@ module ddr3_core #(
     .ui_rst(ui_clk_sync_rst),
     
     // Requisition control interface
-    .ddr3_req_tready(ddr3_req_tready),
-    .ddr3_req_tvalid(ddr3_req_tvalid),
-    .ddr3_req_cmd(ddr3_req_cmd),
-    .ddr3_req_addr(ddr3_req_addr),
-    .ddr3_req_len(ddr3_req_len),
+    .ddr3_req_tready(fifo_req_tready),
+    .ddr3_req_tvalid(fifo_req_tvalid),
+    .ddr3_req_cmd(fifo_req_cmd),
+    .ddr3_req_addr(fifo_req_addr),
+    .ddr3_req_len(fifo_req_len),
     
     // Requisition Status interface
     .init_calib_complete(init_calib_complete),
-    .ddr3_busy(ddr3_busy),
-    .ddr3_done(ddr3_done),
-    .ddr3_error(ddr3_error),
+    .ddr3_busy(ddr3_raw_busy),
+    .ddr3_done(ddr3_raw_done),
+    .ddr3_error(ddr3_raw_error),
 
     // Write data interface
-    .ddr3_wr_tready(ddr3_wr_tready),
-    .ddr3_wr_tvalid(ddr3_wr_tvalid),
-    .ddr3_wr_tdata(ddr3_wr_tdata),
-    .ddr3_wr_tlast(ddr3_wr_tlast),
+    .ddr3_wr_tready(fifo_wr_tready),
+    .ddr3_wr_tvalid(fifo_wr_tvalid),
+    .ddr3_wr_tdata(fifo_wr_tdata),
+    .ddr3_wr_tlast(fifo_wr_tlast),
 
     // Read data interface
-    .ddr3_rd_tready(ddr3_rd_tready),
-    .ddr3_rd_tvalid(ddr3_rd_tvalid),
-    .ddr3_rd_tdata(ddr3_rd_tdata),
-    .ddr3_rd_tlast(ddr3_rd_tlast),
+    .ddr3_rd_tready(fifo_rd_tready),
+    .ddr3_rd_tvalid(fifo_rd_tvalid),
+    .ddr3_rd_tdata(fifo_rd_tdata),
+    .ddr3_rd_tlast(fifo_rd_tlast),
 
     // MIG application interface
     .app_en(app_en),
@@ -159,7 +268,7 @@ module ddr3_core #(
     // Clock|reset
     .sys_clk_i(clk),
     .clk_ref_i(clk_ref),
-    .sys_rst(rst),
+    .sys_rst(~rst),
     
     // Memory interface
     .ddr3_addr(ddr3_addr),
