@@ -8,7 +8,11 @@ PROJECT_FILE := build/$(PROJECT_NAME)/$(PROJECT_NAME).xpr
 
 .PHONY: all project gui clean
 
-all: project
+all: project create_venv
+
+create_venv: requirements.txt
+	python3 -m venv .venv
+	.venv/bin/pip install -r requirements.txt
 
 project:
 	bash -lc 'source $(VIVADO_SETTINGS) && \
@@ -29,3 +33,4 @@ clean:
 	rm -rf $(PROJECT_NAME).runs
 	rm -rf $(PROJECT_NAME).srcs
 	rm -rf $(PROJECT_NAME).gen
+	rm -rf $(VENV)

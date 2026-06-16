@@ -7,17 +7,18 @@
 # PROJECT CONFIGURATIONS
 #========================
 set PROJECT_NAME "gemm_accelerator"
-set TOP_MODULE   "fpga_top"
+set TOP_MODULE   "fpga_core"
 set PART_NAME    "xc7a100tcsg324-1"
 
+set XDC_DIR      "constraints"
 set PROJECT_DIR  "build"
 set RTL_DIR      "rtl"
-set XDC_DIR      "constraints"
 set IP_DIR       "ip"
 
 set BOARD_CLK     100.000
 set SYS_CLK       100.000
-set CLK_REF       200.000
+set DDR3_REF_CLK  200.000
+set ETH_PHY_CLK   25.000
 
 set MIG_PRJ_FILE  "$IP_DIR/mig_7series_0.prj"
 
@@ -47,9 +48,9 @@ proc find_files {dir patterns} {
 set ROOT_DIR [pwd]
 }
 
+set IP_DIR       [file normalize $IP_DIR]
 set RTL_DIR      [file normalize $RTL_DIR]
 set XDC_DIR      [file normalize $XDC_DIR]
-set IP_DIR       [file normalize $IP_DIR]
 set PROJECT_DIR  [file normalize $PROJECT_DIR]
 set MIG_PRJ_FILE [file normalize $MIG_PRJ_FILE]
 
@@ -97,10 +98,12 @@ create_ip \
 
 set_property -dict [list \
     CONFIG.PRIM_IN_FREQ               $BOARD_CLK \
-    CONFIG.NUM_OUT_CLKS               {2} \
+    CONFIG.NUM_OUT_CLKS               {3} \
     CONFIG.CLKOUT1_REQUESTED_OUT_FREQ $SYS_CLK \
     CONFIG.CLKOUT2_USED               {true} \
-    CONFIG.CLKOUT2_REQUESTED_OUT_FREQ $CLK_REF \
+    CONFIG.CLKOUT2_REQUESTED_OUT_FREQ $DDR3_REF_CLK \
+    CONFIG.CLKOUT3_USED               {true} \
+    CONFIG.CLKOUT3_REQUESTED_OUT_FREQ $ETH_PHY_CLK \
     CONFIG.USE_RESET                  {true} \
     CONFIG.RESET_TYPE                 {ACTIVE_HIGH} \
 ] [get_ips clk_wiz_0]
@@ -126,7 +129,54 @@ set_property -dict [list \
 
 generate_target all [get_ips mig_7series_0]
 
-puts "Creating ila_0 ethernet_debug IP..."
+puts "Creating axis_data_fifo_0..."
+
+create_ip \
+    -name axis_data_fifo \
+    -vendor xilinx.com \
+    -library ip \
+    -module_name axis_data_fifo_0
+
+# Configure IP
+set_property -dict [list \
+    CONFIG.TDATA_NUM_BYTES       {16} \
+    CONFIG.FIFO_DEPTH            {16} \
+    CONFIG.HAS_TLAST             {1} \
+    CONFIG.HAS_TKEEP             {0} \
+    CONFIG.HAS_TSTRB             {0} \
+    CONFIG.IS_ACLK_ASYNC         {1} \
+    CONFIG.SYNCHRONIZATION_STAGES {2} \
+    CONFIG.FIFO_MEMORY_TYPE      {auto} \
+] [get_ips axis_data_fifo_0]
+
+# Generate IP products
+generate_target all [get_ips axis_data_fifo_0]
+
+puts "Creating axis_data_fifo_1..."
+
+create_ip \
+    -name axis_data_fifo \
+    -vendor xilinx.com \
+    -library ip \
+    -module_name axis_data_fifo_1
+
+# Configure IP
+set_property -dict [list \
+    CONFIG.TDATA_NUM_BYTES       {6} \
+    CONFIG.FIFO_DEPTH            {16} \
+    CONFIG.HAS_TLAST             {0} \
+    CONFIG.HAS_TKEEP             {0} \
+    CONFIG.HAS_TSTRB             {0} \
+    CONFIG.IS_ACLK_ASYNC         {1} \
+    CONFIG.SYNCHRONIZATION_STAGES {2} \
+    CONFIG.FIFO_MEMORY_TYPE      {auto} \
+] [get_ips axis_data_fifo_1]
+
+# Generate IP products
+generate_target all [get_ips axis_data_fifo_1]
+
+
+puts "Creating ila_0 system_debug IP..."
 
 create_ip \
     -name ila \
@@ -135,30 +185,35 @@ create_ip \
     -module_name ila_0
 
 set_property -dict [list \
-    CONFIG.C_NUM_OF_PROBES {22} \
-    CONFIG.C_DATA_DEPTH {4096} \
+    CONFIG.C_NUM_OF_PROBES {31} \
+    CONFIG.C_DATA_DEPTH {8192} \
     CONFIG.C_PROBE0_WIDTH {1} \
     CONFIG.C_PROBE1_WIDTH {1} \
-    CONFIG.C_PROBE2_WIDTH {1} \
+    CONFIG.C_PROBE2_WIDTH {8} \
     CONFIG.C_PROBE3_WIDTH {1} \
-    CONFIG.C_PROBE4_WIDTH {1} \
+    CONFIG.C_PROBE4_WIDTH {16} \
     CONFIG.C_PROBE5_WIDTH {1} \
-    CONFIG.C_PROBE6_WIDTH {28} \
-    CONFIG.C_PROBE7_WIDTH {16} \
-    CONFIG.C_PROBE8_WIDTH {1} \
+    CONFIG.C_PROBE6_WIDTH {1} \
+    CONFIG.C_PROBE7_WIDTH {1} \
+    CONFIG.C_PROBE8_WIDTH {8} \
     CONFIG.C_PROBE9_WIDTH {1} \
-    CONFIG.C_PROBE10_WIDTH {128} \
+    CONFIG.C_PROBE10_WIDTH {1} \
     CONFIG.C_PROBE11_WIDTH {1} \
     CONFIG.C_PROBE12_WIDTH {128} \
     CONFIG.C_PROBE13_WIDTH {1} \
     CONFIG.C_PROBE14_WIDTH {1} \
-    CONFIG.C_PROBE15_WIDTH {128} \
-    CONFIG.C_PROBE16_WIDTH {1} \
+    CONFIG.C_PROBE15_WIDTH {1} \
+    CONFIG.C_PROBE16_WIDTH {128} \
     CONFIG.C_PROBE17_WIDTH {1} \
     CONFIG.C_PROBE18_WIDTH {1} \
-    CONFIG.C_PROBE19_WIDTH {3} \
+    CONFIG.C_PROBE19_WIDTH {1} \
     CONFIG.C_PROBE20_WIDTH {1} \
-    CONFIG.C_PROBE21_WIDTH {4} \
+    CONFIG.C_PROBE21_WIDTH {1} \
+    CONFIG.C_PROBE22_WIDTH {1} \
+    CONFIG.C_PROBE23_WIDTH {1} \
+    CONFIG.C_PROBE24_WIDTH {1} \
+    CONFIG.C_PROBE25_WIDTH {1} \
+    CONFIG.C_PROBE26_WIDTH {3}
 ] [get_ips ila_0]
 
 generate_target all [get_ips ila_0]
