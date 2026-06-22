@@ -12,17 +12,22 @@ IMAGE_PATH = "images/Landscape.jpg"
 ORIGINAL_OUTPUT_IMAGE = "output/original_img.png"
 OBTAINED_OUTPUT_IMAGE = "output/obtained_img.png"
 
-IMAGE_WIDTH = 4000
+IMAGE_WIDTH = 6000
 IMAGE_HEIGHT = 4000
 
-CHUNK_SIZE = 2048
+CHUNK_SIZE = 1024
 TIMEOUT_SECONDS = 2.0
 
 def image_to_bytes(image_path: str) -> bytes:
   image_path = Path(image_path)
+  original_output_path = Path(ORIGINAL_OUTPUT_IMAGE)
 
   if not image_path.exists():
     raise FileNotFoundError(f"Image not found: {image_path}")
+  
+  if not original_output_path.exists():
+    original_output_path.parent.mkdir(parents=True, exist_ok=True)
+
 
   img = Image.open(image_path)
   img = img.convert("L")

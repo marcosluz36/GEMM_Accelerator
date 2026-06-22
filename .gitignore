@@ -2,3 +2,5 @@
 *.jou
 *.log
 build/
+python/output
+.venv
