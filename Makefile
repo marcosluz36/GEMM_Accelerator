@@ -2,6 +2,8 @@ PROJECT_NAME := gemm_accelerator
 
 VIVADO_SETTINGS := /tools/Xilinx/2025.1/Vivado/settings64.sh
 VIVADO_BIN      := vivado
+VENV            := .venv
+PYTHON_OUTPUT   := python/output
 
 TCL_SCRIPT := scripts/create_project.tcl
 PROJECT_FILE := build/$(PROJECT_NAME)/$(PROJECT_NAME).xpr
@@ -11,8 +13,9 @@ PROJECT_FILE := build/$(PROJECT_NAME)/$(PROJECT_NAME).xpr
 all: project create_venv
 
 create_venv: requirements.txt
-	python3 -m venv .venv
-	.venv/bin/pip install -r requirements.txt
+	uv python install 3.12.3
+	uv venv --python 3.12.3
+	uv pip install -r requirements.txt
 
 project:
 	bash -lc 'source $(VIVADO_SETTINGS) && \
@@ -33,4 +36,5 @@ clean:
 	rm -rf $(PROJECT_NAME).runs
 	rm -rf $(PROJECT_NAME).srcs
 	rm -rf $(PROJECT_NAME).gen
+	rm -rf $(PYTHON_OUTPUT)
 	rm -rf $(VENV)
