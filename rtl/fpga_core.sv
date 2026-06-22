@@ -32,7 +32,7 @@
   localparam DDR3_DATA_WIDTH = 128,
   localparam DDR3_ADDR_WIDTH = 28,
   localparam DDR3_REQ_LEN = 16,
-  localparam NUM_WORDS = 128,
+  localparam NUM_WORDS = 64,
   localparam NUM_ELEMENTS = DDR3_DATA_WIDTH / 8
 )(
   input  wire        clk,
