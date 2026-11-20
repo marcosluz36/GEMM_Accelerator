@@ -1,4 +1,5 @@
 `timescale 1ns / 1ps
+
 //////////////////////////////////////////////////////////////////////////////////
 // Company: X-MEN
 // Engineer: Marcos Luz
@@ -22,161 +23,162 @@
 //////////////////////////////////////////////////////////////////////////////////
 
 
-module main_orchestrator #(
-  parameter NUM_WORDS = 8
-)(
+module main_orchestrator (
   input  wire         clk,
   input  wire         rst,
-
-  input  wire         rx_tvalid,
-  output logic        deserialize_en,
   
-  output logic        serialize_en,
-  input  wire         serialize_done,
-
+  output logic        deserializer_en,
+  output logic        serializer_en,
+  input  wire         serializer_done,
+  
+  output logic        rx_metadata_tready,
+  input  wire         rx_metadata_tvalid,
+  input  wire  [7:0]  rx_metadata_opcode,
+  input  wire  [15:0] rx_metadata_length,
+  
+  output logic [15:0] tx_payload_length,
+  
   input  wire         ddr3_req_tready,
   output logic        ddr3_req_tvalid,
   output logic        ddr3_req_cmd,
-  output logic [27:0] ddr3_req_addr,
-  output logic [15:0] ddr3_req_len,
-
-  input  wire         ddr3_wr_tready,
-  input  wire         ddr3_rd_tvalid,
-
+  
   input  wire         ddr3_error,
   input  wire         ddr3_done,
-
-  output logic [2:0]  dbg_state
+  
+  output logic [3:0]  orchestrator_dbg_state 
 );
 
-  typedef enum logic [2:0] {
-    IDLE             = 3'd0,
-    ISSUE_WRITE_REQ  = 3'd1,
-    WRITE_STREAM     = 3'd2,
-    ISSUE_READ_REQ   = 3'd3,
-    WAIT_READ_DATA   = 3'd4,
-    SEND_STREAM      = 3'd5,
-    SUCCESS          = 3'd6,
-    FAIL             = 3'd7
+  typedef enum logic [3:0] {
+    IDLE                       = 4'd0,
+    DECODE_OPERATION           = 4'd1,
+    ISSUE_DDR3_WRITE           = 4'd2,
+    DDR3_WRITE_ETHERNET_STREAM = 4'd3,
+    ISSUE_DDR3_READ            = 4'd4,
+    ETHERNET_SEND_DDR3_BURST   = 4'd5,
+    OPERATION_SUCCED           = 4'd6,
+    OPERATION_FAILED           = 4'd7
   } main_orchestrator_state;
-
+  
   main_orchestrator_state state, next_state;
-
-  localparam logic        DDR3_CMD_WRITE = 1'b1;
-  localparam logic        DDR3_CMD_READ  = 0;
-
-  assign dbg_state = state;
-
-  wire req_fire = ddr3_req_tvalid && ddr3_req_tready;
-
+  
+  localparam logic [7:0] OP_WRITE_DDR3 = 8'd1;
+  localparam logic [7:0] OP_READ_DDR3  = 8'd2;
+  localparam logic [7:0] OP_CALLBACK   = 8'd3;
+ 
+  localparam logic DDR3_CMD_WRITE = 1'b1;
+  localparam logic DDR3_CMD_READ  = 1'b0;
+  
+  wire rx_metadata_trigger;
+  wire ddr3_req_trigger;
+  
+  assign rx_metadata_trigger = rx_metadata_tready && rx_metadata_tvalid;
+  assign ddr3_req_trigger = ddr3_req_tready && ddr3_req_tvalid;
+  assign orchestrator_dbg_state = state;
+    
   always_comb begin
     next_state = state;
-
-    deserialize_en  = 0;
-    serialize_en    = 0;
-
-    ddr3_req_tvalid = 0;
-    ddr3_req_cmd    = 0;
-    ddr3_req_len    = 0;
-
+    
+    rx_metadata_tready = 1'b0;
+    ddr3_req_tvalid = 1'b0;
+    ddr3_req_cmd = 1'b0;
+    
+    deserializer_en = 1'b0;
+    serializer_en = 1'b0;
+    
     case (state)
-
       IDLE: begin
-        if (rx_tvalid) begin
-          next_state = ISSUE_WRITE_REQ;
-        end
-      end
-
-      ISSUE_WRITE_REQ: begin
-        ddr3_req_tvalid = 1'b1;
-        ddr3_req_cmd    = 1'b1;
-        ddr3_req_len    = NUM_WORDS;
-
-        if (ddr3_error) begin
-          next_state = FAIL;
+        rx_metadata_tready = 1'b1;
+        
+        if (rx_metadata_trigger) begin
+          next_state = DECODE_OPERATION;
         end
         
-        else if (req_fire) begin
-          next_state = WRITE_STREAM;
+        else begin
+          next_state = IDLE;
         end
       end
-
-      WRITE_STREAM: begin
-        deserialize_en = 1'b1;
-
+      
+      DECODE_OPERATION: begin
+        case (rx_metadata_opcode)
+          OP_WRITE_DDR3: begin
+            next_state = ISSUE_DDR3_WRITE;
+          end
+          
+          OP_READ_DDR3: begin 
+            next_state = ISSUE_DDR3_READ;
+          end
+          
+          default: begin
+            next_state = IDLE;
+          end
+        endcase
+      end
+      
+      ISSUE_DDR3_WRITE: begin
+        ddr3_req_tvalid = 1'b1;
+        ddr3_req_cmd = DDR3_CMD_WRITE;
+       
+        if (ddr3_req_trigger) begin
+          next_state = DDR3_WRITE_ETHERNET_STREAM;
+        end
+      end
+      
+      DDR3_WRITE_ETHERNET_STREAM: begin
+        deserializer_en = 1'b1;
+         
         if (ddr3_error) begin
-          next_state = FAIL;
+          next_state = OPERATION_FAILED;
         end
         
         else if (ddr3_done) begin
-          next_state = ISSUE_READ_REQ;
+          next_state = OPERATION_SUCCED;
         end
       end
-
-      ISSUE_READ_REQ: begin
+      
+      ISSUE_DDR3_READ: begin
         ddr3_req_tvalid = 1'b1;
-        ddr3_req_cmd    = 0;
-        ddr3_req_len    = NUM_WORDS;
-
+        ddr3_req_cmd = DDR3_CMD_READ;
+      
+        if (ddr3_req_trigger) begin
+          next_state = ETHERNET_SEND_DDR3_BURST;
+        end  
+      end
+      
+      ETHERNET_SEND_DDR3_BURST: begin
+        serializer_en = 1'b1;
+        
         if (ddr3_error) begin
-          next_state = FAIL;
+          next_state = OPERATION_FAILED;
         end
         
-        else if (req_fire) begin
-          next_state = WAIT_READ_DATA;
+        else if (serializer_done) begin
+          next_state = OPERATION_SUCCED;
         end
       end
-
-      WAIT_READ_DATA: begin
-        if (ddr3_error) begin
-          next_state = FAIL;
-        end
-        
-        else if (ddr3_rd_tvalid) begin
-          next_state = SEND_STREAM;
-        end
-      end
-
-      SEND_STREAM: begin
-        serialize_en = 1'b1;
-
-        if (ddr3_error) begin
-          next_state = FAIL;
-        end
-        
-        else if (serialize_done) begin
-          next_state = SUCCESS;
-        end
-      end
-
-      SUCCESS: begin
+      
+      OPERATION_SUCCED: begin
         next_state = IDLE;
       end
-
-      FAIL: begin
-        next_state = FAIL;
+      
+      OPERATION_FAILED: begin
+        next_state = IDLE;
       end
-
+      
       default: begin
         next_state = IDLE;
       end
-
     endcase
   end
-
-  always_ff @(posedge clk or posedge rst) begin
+  
+  always_ff @ (posedge clk or posedge rst) begin
     if (rst) begin
       state <= IDLE;
-      ddr3_req_addr <= 0;
+      tx_payload_length <= 16'd0;
     end
     
     else begin
       state <= next_state;
-
-      if (state == SUCCESS) begin
-        ddr3_req_addr <= ddr3_req_addr + 28'd16;
-      end
+      tx_payload_length <= rx_metadata_length << 4;
     end
   end
-
 endmodule
