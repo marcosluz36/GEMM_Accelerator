@@ -48,9 +48,9 @@ module deserializer #(
   wire handshake_input;
   wire handshake_output;
   
+  assign s_tready = en && !m_tvalid;
   assign handshake_input  = s_tvalid && s_tready;
   assign handshake_output = m_tvalid && m_tready;
-  assign s_tready         = en && !m_tvalid;
   
   always_comb begin
     next_shift_reg = {shift_reg[OUTPUT_WIDTH-INPUT_WIDTH-1:0], s_tdata};
@@ -61,8 +61,8 @@ module deserializer #(
       m_tvalid  <= 0;
       m_tdata   <= 0;
       m_tlast   <= 0;
-      shift_reg <= 0;
       cnt       <= 0;
+      shift_reg <= 0;
     end
     
     else begin
@@ -79,8 +79,8 @@ module deserializer #(
           m_tdata   <= next_shift_reg; 
           m_tvalid  <= 1'b1;
           m_tlast   <= s_tlast;
-          shift_reg <= 0;
           cnt       <= 0;
+          shift_reg <= 0;
         end
         
         else begin
@@ -89,8 +89,8 @@ module deserializer #(
       end
       
       if (!en) begin
-        shift_reg <= 0;
         cnt       <= 0;
+        shift_reg <= 0;
       end
     end
   end

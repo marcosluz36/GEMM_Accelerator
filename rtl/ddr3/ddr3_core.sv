@@ -49,6 +49,8 @@ module ddr3_core #(
   output logic                       ddr3_busy,
   output logic                       ddr3_done,
   output logic                       ddr3_error,
+  
+  output logic [3:0]                 ddr3_dbg_state,
  
   inout  wire  [15:0]                ddr3_dq,
   inout  wire  [1:0]                 ddr3_dqs_n,
@@ -117,8 +119,6 @@ module ddr3_core #(
   logic                       ddr3_raw_busy;
   logic                       ddr3_raw_done;
   logic                       ddr3_raw_error;
-  
-  logic [3:0]                dbg_ctrl;
   
   assign ddr3_req_tdata = {3'd0, ddr3_req_addr, ddr3_req_len, ddr3_req_cmd};
   assign {fifo_req_pad,fifo_req_addr, fifo_req_len, fifo_req_cmd} = fifo_req_tdata;
@@ -261,7 +261,7 @@ module ddr3_core #(
     .app_rd_data(app_rd_data),
     .app_rd_data_valid(app_rd_data_valid),
     .app_rd_data_end(app_rd_data_end),
-    .dbg_ctrl(dbg_ctrl)
+    .ddr3_dbg_state(ddr3_dbg_state)
   );
   
   mig_7series_0 u_mig_7series_0 (

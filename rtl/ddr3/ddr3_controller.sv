@@ -1,4 +1,3 @@
-`timescale 1ns / 1ps
 //////////////////////////////////////////////////////////////////////////////////
 // Company: X-MEN
 // Engineer: Marcos Luz
@@ -20,24 +19,24 @@
 // 
 //////////////////////////////////////////////////////////////////////////////////
 
+`timescale 1ns / 1ps
+`default_nettype none
 
 module ddr3_controller #(
   parameter DDR3_DATA_WIDTH = 128,
   parameter DDR3_ADDR_WIDTH = 28,
-  parameter DDR3_REQ_LEN    = 16,
-  localparam CMD_WRITE      = 1'b0,
-  localparam CMD_READ       = 1'b1
+  parameter DDR3_REQ_LEN    = 16
 )(
-  input  logic                         ui_clk,
-  input  logic                         ui_rst,
-  input  logic                         init_calib_complete,
+  input  wire                          ui_clk,
+  input  wire                          ui_rst,
+  input  wire                          init_calib_complete,
 
   // Request interface
-  input  logic                         ddr3_req_tvalid,
   output logic                         ddr3_req_tready,
-  input  logic                         ddr3_req_cmd,
-  input  logic [DDR3_ADDR_WIDTH-1:0]   ddr3_req_addr,
-  input  logic [DDR3_REQ_LEN-1:0]      ddr3_req_len,
+  input  wire                          ddr3_req_tvalid,
+  input  wire                          ddr3_req_cmd,
+  input  wire  [DDR3_ADDR_WIDTH-1:0]   ddr3_req_addr,
+  input  wire  [DDR3_REQ_LEN-1:0]      ddr3_req_len,
 
   // Write data interface
   output logic                         ddr3_wr_tready,
@@ -56,24 +55,24 @@ module ddr3_controller #(
   output logic                         ddr3_done,
   output logic                         ddr3_error,
 
-  // MIG application command interface
+  // MIG application command interface 
   output logic [2:0]                   app_cmd,
   output logic                         app_en,
   output logic [DDR3_ADDR_WIDTH-1:0]   app_addr,
-  input  logic                         app_rdy,
+  input  wire                          app_rdy,
 
   // MIG application write-data interface
   output logic [DDR3_DATA_WIDTH-1:0]   app_wdf_data,
   output logic [DDR3_DATA_WIDTH/8-1:0] app_wdf_mask,
   output logic                         app_wdf_wren,
   output logic                         app_wdf_end,
-  input  logic                         app_wdf_rdy,
+  input  wire                          app_wdf_rdy,
 
   // MIG application read-data interface
-  input  logic [DDR3_DATA_WIDTH-1:0]   app_rd_data,
-  input  logic                         app_rd_data_valid,
-  input  logic                         app_rd_data_end,
-  output logic [3:0]                   dbg_ctrl
+  input  wire [DDR3_DATA_WIDTH-1:0]    app_rd_data,
+  input  wire                          app_rd_data_valid,
+  input  wire                          app_rd_data_end,
+  output logic [3:0]                   ddr3_dbg_state
 );
 
   typedef enum logic [3:0] {
@@ -86,9 +85,12 @@ module ddr3_controller #(
     READ_WAIT_CONSUMER  = 4'd6, 
     COMPLETE            = 4'd7, 
     ERROR               = 4'd8  
-  } state_t;
+  } ddr3_controller_state;
 
-  state_t state;
+  ddr3_controller_state state;
+  
+  localparam logic DDR3_CMD_WRITE = 1'b1;
+  localparam logic DDR3_CMD_READ  = 1'b0;
 
   logic                       req_write_reg;
   logic [DDR3_ADDR_WIDTH-1:0] base_addr_reg;
@@ -132,14 +134,14 @@ module ddr3_controller #(
   assign cmd_handshake = app_en && app_rdy;
   assign wdf_handshake = app_wdf_wren && app_wdf_rdy;
 
-  assign dbg_ctrl = state;
-
   // A write beat is complete only after both the MIG 
   // command channel and the MIG write-data channel 
   // have accepted their respective transfers.
   assign write_beat_done =
       (cmd_accepted || cmd_handshake) &&
       (wdf_accepted || wdf_handshake);
+      
+  assign ddr3_dbg_state = state;
 
   always_comb begin
     ddr3_req_tready = 0;
@@ -206,6 +208,7 @@ module ddr3_controller #(
 
   always_ff @(posedge ui_clk) begin
     if (ui_rst) begin
+      state <= IDLE;
       req_write_reg <= 0;
       base_addr_reg <= 0;
       len_reg       <= 0;
@@ -219,8 +222,6 @@ module ddr3_controller #(
       
       rd_data_reg   <= 0;
       rd_last_reg   <= 0;
-      
-      state <= IDLE;
     end 
     
     else begin
@@ -234,19 +235,18 @@ module ddr3_controller #(
           rd_last_reg  <= 0;
           wr_last_reg  <= 0;
 
-          if (ddr3_req_tvalid && init_calib_complete) begin
+          if (ddr3_req_tvalid && ddr3_req_tready) begin
+            req_write_reg <= ddr3_req_cmd;
+            base_addr_reg <= ddr3_req_addr;
+            len_reg       <= ddr3_req_len;
             state <= REQ_ISSUE;
           end
         end
 
         // Latches the request signals and selects the read or write path.
         REQ_ISSUE: begin
-          req_write_reg <= ddr3_req_cmd;
-          base_addr_reg <= ddr3_req_addr;
-          len_reg       <= ddr3_req_len;
           beat_idx      <= 0;
-
-          cmd_accepted  <= 0;
+          cmd_accepted  <= 0; 
           wdf_accepted  <= 0;
           rd_valid_reg  <= 0;
           rd_last_reg   <= 0;
@@ -256,7 +256,7 @@ module ddr3_controller #(
             state <= ERROR;
           end 
           
-          else if (ddr3_req_cmd) begin
+          else if (ddr3_req_cmd == DDR3_CMD_WRITE) begin
             state <= WRITE_WAIT_DATA;
           end 
           
@@ -292,7 +292,11 @@ module ddr3_controller #(
             wdf_accepted <= 0;
             wr_last_reg  <= 0;
 
-            if (wr_last_reg) begin
+            if (wr_last_reg != (beat_idx == len_reg - 1)) begin
+              state <= ERROR;
+            end
+            
+            else if (beat_idx == len_reg - 1) begin
               state <= COMPLETE;
             end 
             
@@ -351,4 +355,21 @@ module ddr3_controller #(
       endcase
     end
   end
+  
+//  ila_3 ddr3_controller (
+//    .clk(ui_clk),             // input wire clk
+  
+//    .probe0(ddr3_req_tready), // input wire [0:0]  probe0  
+//    .probe1(ddr3_req_tvalid), // input wire [0:0]  probe1 
+//    .probe2(ddr3_req_cmd),    // input wire [0:0]  probe2 
+//    .probe3(ddr3_req_addr),   // input wire [27:0] probe3
+//    .probe4(ddr3_req_len),    // input wire [15:0] probe4
+//    .probe5(ddr3_busy),       // input wire [0:0]  probe5,
+//    .probe6(ddr3_done),       // input wire [0:0]  probe6,
+//    .probe7(ddr3_error),      // input wire [0:0]  probe7,
+//    .probe8(len_reg),         // input wire [15:0] probe8,
+//    .probe9(beat_idx),        // input wire [15:0] probe9,
+//    .probe10(state)           // input wire [3:0]  probe10,
+//  );
+  
 endmodule
