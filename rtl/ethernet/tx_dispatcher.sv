@@ -73,7 +73,7 @@ module tx_dispatcher (
   always_ff @(posedge clk or posedge rst) begin
     if (rst) begin
       state <= TX_IDLE;
-      m_udp_length <= 8'd0;
+      m_udp_length <= 16'd0;
     end
     
     else begin
