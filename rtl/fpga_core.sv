@@ -1,5 +1,3 @@
-`timescale 1ns / 1ps
-`default_nettype none
 //////////////////////////////////////////////////////////////////////////////////
 // Company: X-MEN
 // Engineer: Marcos Luz
@@ -28,6 +26,9 @@
 // 
 //////////////////////////////////////////////////////////////////////////////////
 
+
+`timescale 1ns / 1ps
+`default_nettype none
 
 module fpga_core #(
   parameter TARGET = "XILINX",
@@ -114,11 +115,21 @@ module fpga_core #(
   wire          ddr3_done;
   wire          ddr3_error;
   
+  wire          serializer_tready;
+  wire          serializer_tvalid;
+  wire  [127:0] serializer_tdata;
+  wire          serializer_tlast;
+  
   wire          tx_payload_tready;
   wire          tx_payload_tvalid;
   wire  [7:0]   tx_payload_tdata;
   wire          tx_payload_tlast;
   wire  [15:0]  tx_payload_length;
+ 
+  wire  [127:0] callback_tdata;
+  
+  wire  [7:0]   status_code;
+  wire          callback_en;
   
   wire  [2:0]   rx_dbg_state;
   wire  [3:0]   orchestrator_dbg_state;
@@ -135,6 +146,14 @@ module fpga_core #(
   assign rst = ~rst_n;
   assign phy_reset_n = clk_locked && !sys_rst;
   
+  assign serializer_tvalid = (callback_en) ? 1'b1 : ddr3_rd_tvalid;
+  assign serializer_tdata  = (callback_en) ? callback_tdata : ddr3_rd_tdata;
+  assign serializer_tlast  = (callback_en) ? 1'b1 : ddr3_rd_tlast;
+  
+  assign tx_payload_length = (callback_en) ? 16'd16 : (rx_metadata_length << 4);
+  assign callback_tdata = {status_code, rx_metadata_ff, 64'd0};
+  
+  assign ddr3_rd_tready = !callback_en && serializer_tready;
   assign serializer_done = tx_payload_tready && tx_payload_tvalid && tx_payload_tlast;
   
   assign rx_metadata_opcode = rx_metadata_ff[55:48];
@@ -168,7 +187,7 @@ module fpga_core #(
       rx_metadata_ff <= rx_metadata_tdata;
     end
   end
-    
+
   clk_wiz_0 clk_wiz_inst (
     .clk_in1(clk),
     .reset(rst),
@@ -177,6 +196,31 @@ module fpga_core #(
     .clk_out2(clk_ref),
     .clk_out3(phy_ref_clk),
     .locked(clk_locked)
+  );
+  
+  main_orchestrator main_orchestrator_inst (
+    .clk(sys_clk),
+    .rst(sys_rst),
+
+    .deserializer_en(deserializer_en),
+    .serializer_en(serializer_en),
+    .callback_en(callback_en),
+    .serializer_done(serializer_done),
+
+    .rx_metadata_tready(rx_metadata_tready),
+    .rx_metadata_tvalid(rx_metadata_tvalid),
+    .rx_metadata_opcode(rx_metadata_opcode),
+
+    .ddr3_req_tready(ddr3_req_tready),
+    .ddr3_req_tvalid(ddr3_req_tvalid),
+    .ddr3_req_cmd(ddr3_req_cmd),
+
+    .ddr3_error(ddr3_error),
+    .ddr3_done(ddr3_done),
+    
+    .status_code(status_code),
+
+    .orchestrator_dbg_state(orchestrator_dbg_state) 
   );
 
   ethernet_core #(
@@ -298,40 +342,15 @@ module fpga_core #(
     .rst(sys_rst),
     .en(serializer_en),
     
-    .s_tready(ddr3_rd_tready),
-    .s_tvalid(ddr3_rd_tvalid),
-    .s_tdata(ddr3_rd_tdata),
-    .s_tlast(ddr3_rd_tlast),
+    .s_tready(serializer_tready),
+    .s_tvalid(serializer_tvalid),
+    .s_tdata(serializer_tdata),
+    .s_tlast(serializer_tlast),
     
     .m_tready(tx_payload_tready),
     .m_tvalid(tx_payload_tvalid),
     .m_tdata(tx_payload_tdata), 
     .m_tlast(tx_payload_tlast)
-  );
-
-  main_orchestrator main_orchestrator_inst (
-    .clk(sys_clk),
-    .rst(sys_rst),
-    
-    .tx_payload_length(tx_payload_length),
-
-    .deserializer_en(deserializer_en),
-    .serializer_en(serializer_en),
-    .serializer_done(serializer_done),
-
-    .rx_metadata_tready(rx_metadata_tready),
-    .rx_metadata_tvalid(rx_metadata_tvalid),
-    .rx_metadata_opcode(rx_metadata_opcode),
-    .rx_metadata_length(rx_metadata_length),
-
-    .ddr3_req_tready(ddr3_req_tready),
-    .ddr3_req_tvalid(ddr3_req_tvalid),
-    .ddr3_req_cmd(ddr3_req_cmd),
-
-    .ddr3_error(ddr3_error),
-    .ddr3_done(ddr3_done),
-
-    .orchestrator_dbg_state(orchestrator_dbg_state) 
   );
   
 //  ila_4 fpga_core_datapath (
@@ -341,23 +360,23 @@ module fpga_core #(
 //    .probe1(rx_payload_tvalid),      // input wire [0:0]   probe1 
 //    .probe2(rx_payload_tdata),       // input wire [7:0]   probe2 
 //    .probe3(rx_payload_tlast),       // input wire [0:0]   probe3 
-//    .probe4(rx_payload_length),      // input wire [15:0]  probe4 
+//    .probe4({8'd0, status_code}),    // input wire [15:0]  probe4 
 //    .probe5(rx_metadata_tready),     // input wire [0:0]   probe5 
 //    .probe6(rx_metadata_tvalid),     // input wire [0:0]   probe6 
 //    .probe7(rx_metadata_opcode),     // input wire [7:0]   probe7 
 //    .probe8(rx_metadata_addr),       // input wire [27:0]  probe8 
 //    .probe9(rx_metadata_length),     // input wire [15:0]  probe9 
-//    .probe10(deserializer_en),       // input wire [0:0]   probe10 
+//    .probe10(callback_en),           // input wire [0:0]   probe10 
 //    .probe11(serializer_en),         // input wire [0:0]   probe11 
 //    .probe12(serializer_done),       // input wire [0:0]   probe12 
 //    .probe13(ddr3_req_tready),       // input wire [0:0]   probe13 
 //    .probe14(ddr3_req_tvalid),       // input wire [0:0]   probe14 
 //    .probe15(ddr3_done),             // input wire [0:0]   probe15 
 //    .probe16(ddr3_error),            // input wire [0:0]   probe16 
-//    .probe17(ddr3_wr_tready),        // input wire [0:0]   probe17 
-//    .probe18(ddr3_wr_tvalid),        // input wire [0:0]   probe18 
-//    .probe19(ddr3_wr_tdata),         // input wire [127:0] probe19 
-//    .probe20(ddr3_wr_tlast),         // input wire [0:0]   probe20 
+//    .probe17(serializer_tready),        // input wire [0:0]   probe17 
+//    .probe18(serializer_tvalid),        // input wire [0:0]   probe18 
+//    .probe19(serializer_tdata),         // input wire [127:0] probe19 
+//    .probe20(serializer_tlast),         // input wire [0:0]   probe20 
 //    .probe21(ddr3_rd_tready),        // input wire [0:0]   probe21 
 //    .probe22(ddr3_rd_tvalid),        // input wire [0:0]   probe22 
 //    .probe23(ddr3_rd_tdata),         // input wire [127:0] probe23 

@@ -1,5 +1,3 @@
-`timescale 1ns / 1ps
-
 //////////////////////////////////////////////////////////////////////////////////
 // Company: X-MEN
 // Engineer: Marcos Luz
@@ -23,20 +21,22 @@
 //////////////////////////////////////////////////////////////////////////////////
 
 
+`timescale 1ns / 1ps
+`default_nettype none
+
 module main_orchestrator (
   input  wire         clk,
   input  wire         rst,
   
   output logic        deserializer_en,
   output logic        serializer_en,
+  output logic        callback_en,
   input  wire         serializer_done,
   
   output logic        rx_metadata_tready,
   input  wire         rx_metadata_tvalid,
   input  wire  [7:0]  rx_metadata_opcode,
-  input  wire  [15:0] rx_metadata_length,
-  
-  output logic [15:0] tx_payload_length,
+  output logic [7:0]  status_code,
   
   input  wire         ddr3_req_tready,
   output logic        ddr3_req_tvalid,
@@ -55,15 +55,14 @@ module main_orchestrator (
     DDR3_WRITE_ETHERNET_STREAM = 4'd3,
     ISSUE_DDR3_READ            = 4'd4,
     ETHERNET_SEND_DDR3_BURST   = 4'd5,
-    OPERATION_SUCCED           = 4'd6,
-    OPERATION_FAILED           = 4'd7
+    CALLBACK_STATUS            = 4'd6
+    
   } main_orchestrator_state;
   
   main_orchestrator_state state, next_state;
   
   localparam logic [7:0] OP_WRITE_DDR3 = 8'd1;
   localparam logic [7:0] OP_READ_DDR3  = 8'd2;
-  localparam logic [7:0] OP_CALLBACK   = 8'd3;
  
   localparam logic DDR3_CMD_WRITE = 1'b1;
   localparam logic DDR3_CMD_READ  = 1'b0;
@@ -84,6 +83,7 @@ module main_orchestrator (
     
     deserializer_en = 1'b0;
     serializer_en = 1'b0;
+    callback_en = 1'b0;
     
     case (state)
       IDLE: begin
@@ -126,12 +126,8 @@ module main_orchestrator (
       DDR3_WRITE_ETHERNET_STREAM: begin
         deserializer_en = 1'b1;
          
-        if (ddr3_error) begin
-          next_state = OPERATION_FAILED;
-        end
-        
-        else if (ddr3_done) begin
-          next_state = OPERATION_SUCCED;
+        if (ddr3_error || ddr3_done) begin
+          next_state = CALLBACK_STATUS;
         end
       end
       
@@ -147,21 +143,18 @@ module main_orchestrator (
       ETHERNET_SEND_DDR3_BURST: begin
         serializer_en = 1'b1;
         
-        if (ddr3_error) begin
-          next_state = OPERATION_FAILED;
+        if (ddr3_error || serializer_done) begin
+          next_state = CALLBACK_STATUS;
         end
+      end
+      
+      CALLBACK_STATUS: begin
+        serializer_en = 1'b1;
+        callback_en = 1'b1;
         
-        else if (serializer_done) begin
-          next_state = OPERATION_SUCCED;
+        if (serializer_done) begin
+          next_state = IDLE;
         end
-      end
-      
-      OPERATION_SUCCED: begin
-        next_state = IDLE;
-      end
-      
-      OPERATION_FAILED: begin
-        next_state = IDLE;
       end
       
       default: begin
@@ -173,12 +166,35 @@ module main_orchestrator (
   always_ff @ (posedge clk or posedge rst) begin
     if (rst) begin
       state <= IDLE;
-      tx_payload_length <= 16'd0;
+      status_code <= 8'd0;
     end
     
     else begin
       state <= next_state;
-      tx_payload_length <= rx_metadata_length << 4;
+      
+      if (state == DDR3_WRITE_ETHERNET_STREAM) begin
+        if (ddr3_error) begin
+          status_code <= 8'hF3;
+        end
+        
+        else if (ddr3_done) begin
+          status_code <= 8'h23;
+        end
+      end
+      
+      else if (state == ETHERNET_SEND_DDR3_BURST) begin
+        if (ddr3_error) begin
+          status_code <= 8'hF5;
+        end
+        
+        else if (ddr3_done) begin
+          status_code <= 8'h25;
+        end
+      end
+      
+      else begin
+        status_code <= status_code;
+      end
     end
   end
 endmodule
